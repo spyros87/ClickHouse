@@ -496,6 +496,9 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                 }
             }
 
+            if (state)
+                break;
+
             if (num_waiting_threads == num_threads)
             {
                 finished = true;
