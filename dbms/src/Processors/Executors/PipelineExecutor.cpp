@@ -525,7 +525,7 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                         if (found_processor_to_execute)
                             break;
 
-                        if (num_waiting_threads.fetch_add(1) + 1 == num_threads)
+                        if (num_waiting_threads.fetch_add(1) + 1 == num_threads && task_queue.empty())
                         {
                             finished = true;
                             main_executor_condvar.notify_all();
