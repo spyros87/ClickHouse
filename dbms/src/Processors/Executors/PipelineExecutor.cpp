@@ -494,6 +494,8 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                     ++num_waited_tasks;
                     break;
                 }
+                else
+                    state = nullptr;
             }
 
             if (state)
