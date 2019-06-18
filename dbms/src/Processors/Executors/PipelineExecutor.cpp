@@ -516,6 +516,9 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                             }
                         }
 
+                        if (!task_queue.empty())
+                            main_executor_condvar.notify_all();
+
                         if (found_processor_to_execute)
                             break;
 
@@ -527,7 +530,7 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                             break;
                         }
 
-                        main_executor_condvar.wait(lock, [&]() { return finished || !prepare_stack.empty(); });
+                        main_executor_condvar.wait(lock, [&]() { return finished || !prepare_stack.empty() || !task_queue.empty(); });
 
                         num_waiting_threads.fetch_sub(1);
                     }
