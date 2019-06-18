@@ -606,7 +606,8 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
             /// Try to execute neighbour processor.
             {
                 bool expected = false;
-                while (!main_executor_flag.compare_exchange_strong(expected, true));
+                while (!main_executor_flag.compare_exchange_strong(expected, true))
+                    expected = false;
 
                 /// std::unique_lock lock(main_executor_mutex);
 
