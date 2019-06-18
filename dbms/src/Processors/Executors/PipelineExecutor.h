@@ -88,8 +88,8 @@ private:
 
     EventCounter event_counter;
 
-    UInt64 num_waited_tasks = 0;
-    UInt64 num_tasks_to_wait = 0;
+    std::atomic<UInt64> num_waited_tasks;
+    std::atomic<UInt64> num_tasks_to_wait;
 
     std::atomic_bool cancelled;
     std::atomic_bool finished;

@@ -29,7 +29,7 @@ static bool checkCanAddAdditionalInfoToException(const DB::Exception & exception
 }
 
 PipelineExecutor::PipelineExecutor(Processors processors)
-    : processors(std::move(processors)), cancelled(false), finished(false), num_waiting_threads(0)
+    : processors(std::move(processors)), num_waited_tasks(0), num_tasks_to_wait(0), cancelled(false), finished(false), num_waiting_threads(0)
 {
     buildGraph();
 }
@@ -483,10 +483,20 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
         /// First, find any processor to execute.
         /// Just travers graph and prepare any processor.
         {
-            if (task_queue.pop(state))
-                found_processor_to_execute = true;
+            {
+                UInt64 added_tasks = num_tasks_to_wait.load();
+                while (num_waited_tasks < added_tasks)
+                {
+                    if (task_queue.pop(state))
+                    {
+                        found_processor_to_execute = true;
+                        ++num_waited_tasks;
+                        break;
+                    }
+                }
+            }
 
-            else
+            if (!found_processor_to_execute)
             {
                 Stopwatch processing_time_watch;
 
@@ -510,22 +520,36 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                                 state = graph[proc].execution_state.get();
 
                                 if (found_processor_to_execute)
+                                {
+                                    ++num_tasks_to_wait;
                                     while (!task_queue.push(state));
+                                }
                                 else
                                     found_processor_to_execute = true;
                             }
                         }
 
-                        if (!found_processor_to_execute && task_queue.pop(state))
-                            found_processor_to_execute = true;
+                        if (!found_processor_to_execute)
+                        {
+                            UInt64 added_tasks = num_tasks_to_wait.load();
+                            while (num_waited_tasks < added_tasks)
+                            {
+                                if (task_queue.pop(state))
+                                {
+                                    found_processor_to_execute = true;
+                                    ++num_waited_tasks;
+                                    break;
+                                }
+                            }
+                        }
 
-                        if (!task_queue.empty())
+                        if (num_waited_tasks < num_tasks_to_wait)
                             main_executor_condvar.notify_all();
 
                         if (found_processor_to_execute)
                             break;
 
-                        if (num_waiting_threads.fetch_add(1) + 1 == num_threads && task_queue.empty())
+                        if (num_waiting_threads.fetch_add(1) + 1 == num_threads && num_waited_tasks == num_tasks_to_wait)
                         {
                             finished = true;
                             main_executor_condvar.notify_all();
@@ -533,7 +557,7 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                             break;
                         }
 
-                        main_executor_condvar.wait(lock, [&]() { return finished || !prepare_stack.empty() || !task_queue.empty(); });
+                        main_executor_condvar.wait(lock, [&]() { return finished || num_waited_tasks < num_tasks_to_wait; });
 
                         num_waiting_threads.fetch_sub(1);
                     }
@@ -591,12 +615,16 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
 
                     if (graph[current_processor].status == ExecStatus::Executing)
                     {
+                        ++num_tasks_to_wait;
                         state = graph[current_processor].execution_state.get();
 
                         if (found_processor_to_execute)
                             while (!task_queue.push(state));
                         else
+                        {
                             found_processor_to_execute = true;
+                            ++num_waited_tasks;
+                        }
                     }
                 }
             }
