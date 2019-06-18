@@ -479,96 +479,103 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
 
     while (!finished)
     {
+        ++num_waiting_threads;
+
         /// First, find any processor to execute.
         /// Just travers graph and prepare any processor.
+        while (!finished)
         {
+
+            while (num_waited_tasks < num_tasks_to_wait)
             {
-                UInt64 added_tasks = num_tasks_to_wait.load();
-                while (num_waited_tasks < added_tasks)
+                if (task_queue.pop(state))
                 {
-                    if (task_queue.pop(state))
-                    {
-                        ++num_waited_tasks;
-                        break;
-                    }
+                    --num_waiting_threads;
+                    ++num_waited_tasks;
+                    break;
                 }
             }
 
-            if (!state)
+            if (num_waiting_threads == num_threads)
             {
-                Stopwatch processing_time_watch;
-
-                {
-                    std::unique_lock lock(main_executor_mutex);
-
-                    while (!state)
-                    {
-                        if (finished)
-                            break;
-
-                        while (!prepare_stack.empty())
-                        {
-                            UInt64 proc = prepare_stack.top();
-                            prepare_stack.pop();
-
-                            prepareProcessor(proc, false);
-
-                            if (graph[proc].status == ExecStatus::Executing)
-                            {
-                                auto cur_state = graph[proc].execution_state.get();
-
-                                if (!state)
-                                {
-                                    ++num_tasks_to_wait;
-                                    while (!task_queue.push(cur_state));
-                                }
-                                else
-                                    state = cur_state;
-                            }
-                        }
-
-                        if (!state)
-                        {
-                            UInt64 added_tasks = num_tasks_to_wait.load();
-                            while (num_waited_tasks < added_tasks)
-                            {
-                                if (task_queue.pop(state))
-                                {
-                                    ++num_waited_tasks;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (num_waited_tasks < num_tasks_to_wait)
-                            main_executor_condvar.notify_all();
-
-                        if (state)
-                            break;
-
-                        if (num_waiting_threads.fetch_add(1) + 1 == num_threads && num_waited_tasks == num_tasks_to_wait)
-                        {
-                            finished = true;
-                            main_executor_condvar.notify_all();
-                            finish_condvar.notify_one();
-                            break;
-                        }
-
-                        main_executor_condvar.wait(lock, [&]() { return finished || !prepare_stack.empty() || num_waited_tasks < num_tasks_to_wait; });
-
-                        num_waiting_threads.fetch_sub(1);
-                    }
-                }
-
-                processing_time_ns += processing_time_watch.elapsed();
+                finished = true;
+                finish_condvar.notify_one();
             }
+
+//            if (!state)
+//            {
+//                Stopwatch processing_time_watch;
+//
+//                {
+//                    std::unique_lock lock(main_executor_mutex);
+//
+//                    while (!state)
+//                    {
+//                        if (finished)
+//                            break;
+//
+//                        while (!prepare_stack.empty())
+//                        {
+//                            UInt64 proc = prepare_stack.top();
+//                            prepare_stack.pop();
+//
+//                            prepareProcessor(proc, false);
+//
+//                            if (graph[proc].status == ExecStatus::Executing)
+//                            {
+//                                auto cur_state = graph[proc].execution_state.get();
+//
+//                                if (!state)
+//                                {
+//                                    ++num_tasks_to_wait;
+//                                    while (!task_queue.push(cur_state));
+//                                }
+//                                else
+//                                    state = cur_state;
+//                            }
+//                        }
+//
+//                        if (!state)
+//                        {
+//                            while (num_waited_tasks < num_tasks_to_wait)
+//                            {
+//                                if (task_queue.pop(state))
+//                                {
+//                                    ++num_waited_tasks;
+//                                    break;
+//                                }
+//                            }
+//                        }
+//
+//                        if (num_waited_tasks < num_tasks_to_wait)
+//                            main_executor_condvar.notify_all();
+//
+//                        if (state)
+//                            break;
+//
+//                        if (num_waiting_threads.fetch_add(1) + 1 == num_threads && num_waited_tasks == num_tasks_to_wait)
+//                        {
+//                            finished = true;
+//                            main_executor_condvar.notify_all();
+//                            finish_condvar.notify_one();
+//                            break;
+//                        }
+//
+//                        main_executor_condvar.wait(lock, [&]() { return finished || !prepare_stack.empty() || num_waited_tasks < num_tasks_to_wait; });
+//
+//                        num_waiting_threads.fetch_sub(1);
+//                    }
+//                }
+//
+//                processing_time_ns += processing_time_watch.elapsed();
+//            }
         }
 
         if (finished)
             break;
 
         /// In case if somebody is sleeping and prepare_queue is not empty.
-        main_executor_condvar.notify_one();
+        /// main_executor_condvar.notify_one();
 
         while (state)
         {
@@ -625,7 +632,7 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
             }
 
             /// Let another thread to continue.
-            main_executor_condvar.notify_all();
+            /// main_executor_condvar.notify_all();
 
             processing_time_ns += processing_time_watch.elapsed();
         }
@@ -648,6 +655,20 @@ void PipelineExecutor::executeImpl(size_t num_threads)
     task_queue.reserve_unsafe(8192);
     finished_execution_queue.reserve_unsafe(num_threads);
 
+    while (!prepare_stack.empty())
+    {
+        UInt64 proc = prepare_stack.top();
+        prepare_stack.pop();
+
+        prepareProcessor(proc, false);
+
+        if (graph[proc].status == ExecStatus::Executing)
+        {
+            auto cur_state = graph[proc].execution_state.get();
+            ++num_tasks_to_wait;
+            while (!task_queue.push(cur_state));
+        }
+    }
 
     threads.reserve(num_threads);
     executor_contexts.reserve(num_threads);
