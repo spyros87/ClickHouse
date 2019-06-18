@@ -29,7 +29,7 @@ static bool checkCanAddAdditionalInfoToException(const DB::Exception & exception
 }
 
 PipelineExecutor::PipelineExecutor(Processors processors)
-    : processors(std::move(processors)), num_waited_tasks(0), num_tasks_to_wait(0), cancelled(false), finished(false), num_waiting_threads(0)
+    : processors(std::move(processors)), num_waited_tasks(0), num_tasks_to_wait(0), cancelled(false), finished(false), main_executor_flag(false), num_waiting_threads(0)
 {
     buildGraph();
 }
@@ -605,7 +605,10 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
 
             /// Try to execute neighbour processor.
             {
-                std::unique_lock lock(main_executor_mutex);
+                bool expected = false;
+                while (!main_executor_flag.compare_exchange_strong(expected, true));
+
+                /// std::unique_lock lock(main_executor_mutex);
 
                 prepareProcessor(state->processors_id, false);
 
@@ -634,6 +637,8 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                             state = cur_state;
                     }
                 }
+
+                main_executor_flag = false;
             }
 
             /// Let another thread to continue.
