@@ -483,7 +483,7 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
         /// First, find any processor to execute.
         /// Just travers graph and prepare any processor.
         {
-            if (task_queue.push(state))
+            if (task_queue.pop(state))
                 found_processor_to_execute = true;
 
             else
