@@ -516,6 +516,9 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                             }
                         }
 
+                        if (!found_processor_to_execute && task_queue.pop(state))
+                            found_processor_to_execute = true;
+
                         if (!task_queue.empty())
                             main_executor_condvar.notify_all();
 
