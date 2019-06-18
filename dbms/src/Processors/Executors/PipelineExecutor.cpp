@@ -615,22 +615,21 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
 
                     if (graph[current_processor].status == ExecStatus::Executing)
                     {
-                        ++num_tasks_to_wait;
                         state = graph[current_processor].execution_state.get();
 
                         if (found_processor_to_execute)
-                            while (!task_queue.push(state));
-                        else
                         {
-                            found_processor_to_execute = true;
-                            ++num_waited_tasks;
+                            ++num_tasks_to_wait;
+                            while (!task_queue.push(state));
                         }
+                        else
+                            found_processor_to_execute = true;
                     }
                 }
             }
 
             /// Let another thread to continue.
-            main_executor_condvar.notify_one();
+            main_executor_condvar.notify_all();
 
             processing_time_ns += processing_time_watch.elapsed();
         }
