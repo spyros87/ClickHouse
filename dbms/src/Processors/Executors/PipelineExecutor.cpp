@@ -476,7 +476,6 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
     Stopwatch total_time_watch;
 
     ExecutionState * state = nullptr;
-    bool found_processor_to_execute = false;
 
     while (!finished)
     {
@@ -489,21 +488,20 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                 {
                     if (task_queue.pop(state))
                     {
-                        found_processor_to_execute = true;
                         ++num_waited_tasks;
                         break;
                     }
                 }
             }
 
-            if (!found_processor_to_execute)
+            if (!state)
             {
                 Stopwatch processing_time_watch;
 
                 {
                     std::unique_lock lock(main_executor_mutex);
 
-                    while (!found_processor_to_execute)
+                    while (!state)
                     {
                         if (finished)
                             break;
@@ -517,26 +515,25 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
 
                             if (graph[proc].status == ExecStatus::Executing)
                             {
-                                state = graph[proc].execution_state.get();
+                                auto cur_state = graph[proc].execution_state.get();
 
-                                if (found_processor_to_execute)
+                                if (!state)
                                 {
                                     ++num_tasks_to_wait;
-                                    while (!task_queue.push(state));
+                                    while (!task_queue.push(cur_state));
                                 }
                                 else
-                                    found_processor_to_execute = true;
+                                    state = cur_state;
                             }
                         }
 
-                        if (!found_processor_to_execute)
+                        if (!state)
                         {
                             UInt64 added_tasks = num_tasks_to_wait.load();
                             while (num_waited_tasks < added_tasks)
                             {
                                 if (task_queue.pop(state))
                                 {
-                                    found_processor_to_execute = true;
                                     ++num_waited_tasks;
                                     break;
                                 }
@@ -546,7 +543,7 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                         if (num_waited_tasks < num_tasks_to_wait)
                             main_executor_condvar.notify_all();
 
-                        if (found_processor_to_execute)
+                        if (state)
                             break;
 
                         if (num_waiting_threads.fetch_add(1) + 1 == num_threads && num_waited_tasks == num_tasks_to_wait)
@@ -573,7 +570,7 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
         /// In case if somebody is sleeping and prepare_queue is not empty.
         main_executor_condvar.notify_one();
 
-        while (found_processor_to_execute)
+        while (state)
         {
             if (finished)
                 break;
@@ -593,7 +590,6 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                 break;
 
             Stopwatch processing_time_watch;
-            found_processor_to_execute = false;
 
             /// Try to execute neighbour processor.
             {
@@ -602,8 +598,8 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
                 prepareProcessor(state->processors_id, false);
 
                 /// Execute again if can.
-                if (graph[state->processors_id].status == ExecStatus::Executing)
-                    found_processor_to_execute = true;
+                if (graph[state->processors_id].status != ExecStatus::Executing)
+                    state = nullptr;
 
                 /// Process all neighbours. Children will be on the top of stack, then parents.
                 while (!prepare_stack.empty())
@@ -615,15 +611,15 @@ void PipelineExecutor::executeSingleThread(size_t num_threads)
 
                     if (graph[current_processor].status == ExecStatus::Executing)
                     {
-                        state = graph[current_processor].execution_state.get();
+                        auto cur_state = graph[current_processor].execution_state.get();
 
-                        if (found_processor_to_execute)
+                        if (state)
                         {
                             ++num_tasks_to_wait;
-                            while (!task_queue.push(state));
+                            while (!task_queue.push(cur_state));
                         }
                         else
-                            found_processor_to_execute = true;
+                            state = cur_state;
                     }
                 }
             }
